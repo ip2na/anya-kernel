@@ -957,30 +957,43 @@ static void insert_request_post_stability(struct blk_mq_hw_ctx *hctx,
 
 // Insert a request into the scheduler (before Read & Write models stabilizes)
 static void insert_request_pre_stability(struct blk_mq_hw_ctx *hctx,
-		struct request *rq, bool at_head) {
-	struct adios_data *ad = hctx->queue->elevator->elevator_data;
-	struct adios_rq_data *rd = get_rq_data(rq);
-	u8 optype = adios_optype(rq);
-	u8 pq_idx = at_head ? 0 : 1;
-	bool stable = false;
+                struct request *rq, bool at_head) {
+        struct adios_data *ad = hctx->queue->elevator->elevator_data;
+        struct adios_rq_data *rd = get_rq_data(rq);
+        u8 optype = adios_optype(rq);
+        u8 pq_idx = at_head ? 0 : 1;
+        bool stable = false;
+        bool rq_is_flush;
 
-	rd->managed = true;
-	rd->block_size = blk_rq_bytes(rq);
-	rd->pred_lat =
-		latency_model_predict(&ad->latency_model[optype], rd->block_size);
-	if (unlikely(rd->pred_lat > ad->lat_model_latency_limit))
-		rd->pred_lat = ad->lat_model_latency_limit;
+        rd->managed = true;
+        rd->block_size = blk_rq_bytes(rq);
+        rd->pred_lat =
+                latency_model_predict(&ad->latency_model[optype], rd->block_size);
+        if (unlikely(rd->pred_lat > ad->lat_model_latency_limit))
+                rd->pred_lat = ad->lat_model_latency_limit;
 
-	insert_to_prio_queue(ad, rq, pq_idx);
+        /* Barrier handling must apply even before models stabilize */
+        rq_is_flush = (rq->cmd_flags & REQ_OP_MASK) == REQ_OP_FLUSH;
+        if (!at_head && (eval_adios_state(ad, ADIOS_STATE_BP) || rq_is_flush)) {
+                scoped_guard(spinlock_irqsave, &ad->barrier_lock) {
+                        if (rq_is_flush)
+                                set_adios_state(ad, ADIOS_STATE_BP, 0, true);
+                        list_add_tail(&rq->queuelist, &ad->barrier_queue);
+                }
+                goto check_stable;
+        }
 
-	rcu_read_lock();
-	if (rcu_dereference(ad->latency_model[ADIOS_READ].params)->base > 0 &&
-		rcu_dereference(ad->latency_model[ADIOS_WRITE].params)->base > 0)
-			stable = true;
-	rcu_read_unlock();
+        insert_to_prio_queue(ad, rq, pq_idx);
 
-	if (stable)
-		ad->models_stable = true;
+check_stable:
+        rcu_read_lock();
+        if (rcu_dereference(ad->latency_model[ADIOS_READ].params)->base > 0 &&
+                rcu_dereference(ad->latency_model[ADIOS_WRITE].params)->base > 0)
+                        stable = true;
+        rcu_read_unlock();
+
+        if (stable)
+                ad->models_stable = true;
 }
 
 // Insert multiple requests into the scheduler
