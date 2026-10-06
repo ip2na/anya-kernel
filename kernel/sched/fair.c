@@ -632,18 +632,21 @@ static void restart_burst(struct sched_entity *se) {
 }
 
 static void reset_task_weights_bore(void) {
-	struct task_struct *task;
+	struct task_struct *g, *task;
 	struct rq *rq;
 	struct rq_flags rf;
 
-	write_lock_irq(&tasklist_lock);
-	for_each_process(task) {
-		rq = task_rq(task);
-		rq_lock_irqsave(rq, &rf);
-		reweight_task_by_prio(task, effective_prio(task));
-		rq_unlock_irqrestore(rq, &rf);
+	rcu_read_lock();
+	for_each_process_thread(g, task) {
+		rq = task_rq_lock(task, &rf);
+		if (task->sched_class == &fair_sched_class &&
+		    !task_has_idle_policy(task)) {
+			update_rq_clock(rq);
+			reweight_task_by_prio(task, effective_prio(task));
+		}
+		task_rq_unlock(rq, task, &rf);
 	}
-	write_unlock_irq(&tasklist_lock);
+	rcu_read_unlock();
 }
 
 int sched_bore_update_handler(struct ctl_table *table, int write,
