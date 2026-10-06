@@ -888,6 +888,11 @@ static void set_load_weight(struct task_struct *p)
 	bool update_load = !(READ_ONCE(p->state) & TASK_NEW);
 	int prio = p->static_prio - MAX_RT_PRIO;
 	struct load_weight lw;
+#ifdef CONFIG_SCHED_BORE
+	extern u8 sched_bore;
+	if (likely(sched_bore))
+		prio = min(39, prio + (int)p->se.burst_score);
+#endif // CONFIG_SCHED_BORE
 
 	if (task_has_idle_policy(p)) {
 		lw.weight = scale_load(WEIGHT_IDLEPRIO);

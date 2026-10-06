@@ -596,6 +596,8 @@ static void update_burst_score(struct sched_entity *se) {
 		return;
 
 	p = task_of(se);
+	if (task_has_idle_policy(p))
+		return;
 	prev_prio = effective_prio(p);
 
 	if (!((p->flags & PF_KTHREAD) && likely(sched_burst_exclude_kthreads)))
